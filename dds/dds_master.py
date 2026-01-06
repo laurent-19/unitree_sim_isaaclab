@@ -5,7 +5,8 @@ import threading
 from typing import Dict, List, Optional
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize
 from dds.dds_base import DDSObject
-
+from tools.logger_manager import logger_manager, LogCategory, LogLevel
+import os
 
 
 class DDSManager:    
@@ -37,11 +38,16 @@ class DDSManager:
         self._pub_list: List[str] = []
         self._pub_interval: Dict[str, float] = {}
         self._pub_next_ts: Dict[str, float] = {}
-        self._default_pub_interval: float = 0.01  # 100Hz default
+        # 根据任务类型动态设置默认发布频率
+        task_type = os.getenv("TASK_TYPE", "default")
+        if task_type in ["replay", "evaluation"]:
+            self._default_pub_interval = 0.05  # 20Hz for low-frequency tasks
+        else:
+            self._default_pub_interval = 0.01  # 100Hz default for real-time control
 
         self.dds_initialized = False
         self._init_dds()
-        print("[DDSManager] DDSManager initialized")
+        logger_manager.log(LogLevel.INFO, "DDSManager initialized", LogCategory.SYSTEM, "dds_manager")
     
     def _parse_object_name(self, name: str) -> tuple[str, str]:
         """Parse object name"""
@@ -59,56 +65,59 @@ class DDSManager:
         try:
             ChannelFactoryInitialize(1)
             self.dds_initialized = True
-            print("[DDSManager] DDS system initialized")
+            logger_manager.log(LogLevel.INFO, "DDS system initialized", LogCategory.SYSTEM, "dds_init")
             return True
         except Exception as e:
-            print(f"[DDSManager] DDS system initialization failed: {e}")
+            logger_manager.log(LogLevel.ERROR, f"DDS system initialization failed: {e}", LogCategory.SYSTEM, "dds_init")
             return False
     
     def register_object(self, name: str, obj: DDSObject) -> bool:
         """Register DDS object"""
         if name in self.objects:
-            print(f"[DDSManager] object '{name}' already exists")
+            logger_manager.log(LogLevel.WARNING, f"Object '{name}' already exists", LogCategory.SYSTEM, "dds_register")
             return False
-        
+
         try:
             category, obj_name = self._parse_object_name(name)
-            
+
             self.objects[name] = obj
-            
-            print(f"[DDSManager] register object '{name}' success (category: {category or 'No category'})")
-            
+
+            logger_manager.log(LogLevel.INFO, f"Registered DDS object '{name}' (category: {category or 'No category'})",
+                             LogCategory.SYSTEM, "dds_register")
+
             # default frequency
             self._pub_interval[name] = self._default_pub_interval
             self._pub_next_ts[name] = 0.0
             return True
         except Exception as e:
-            print(f"[DDSManager] register object '{name}' failed: {e}")
+            logger_manager.log(LogLevel.ERROR, f"Failed to register DDS object '{name}': {e}",
+                             LogCategory.SYSTEM, "dds_register")
             return False
     
     def unregister_object(self, name: str) -> bool:
         """Unregister DDS object"""
         if name not in self.objects:
-            print(f"[DDSManager] object '{name}' not found")
+            logger_manager.log(LogLevel.WARNING, f"DDS object '{name}' not found", LogCategory.SYSTEM, "dds_unregister")
             return False
-        
+
         obj = self.objects[name]
         obj.publishing = False
         obj.subscribing = False
-        
+
         del self.objects[name]
         self._pub_interval.pop(name, None)
         self._pub_next_ts.pop(name, None)
         if name in self._pub_list:
             self._pub_list.remove(name)
-        print(f"[DDSManager] unregister object '{name}' success")
+            logger_manager.log(LogLevel.INFO, f"Unregistered DDS object '{name}'", LogCategory.SYSTEM, "dds_unregister")
         return True
     
     def get_object(self, name: str) -> Optional[DDSObject]:
         """Get specified object"""
         obj = self.objects.get(name)
         if obj is None:
-            print(f"[DDSManager] object '{name}' not found, objects: {self.objects.keys()}")
+            logger_manager.log(LogLevel.WARNING, f"DDS object '{name}' not found",
+                             LogCategory.SYSTEM, "dds_get", extra={'available_objects': list(self.objects.keys())})
             return None
         return obj
     
@@ -127,7 +136,7 @@ class DDSManager:
             self._pub_interval[name] = 1.0 / hz
             # make the next cycle take effect immediately
             self._pub_next_ts[name] = 0.0
-            print(f"[DDSManager] set publish rate for '{name}' to {hz}Hz")
+            logger_manager.log(LogLevel.DEBUG, f"Set publish rate for '{name}' to {hz}Hz", LogCategory.SYSTEM, "dds_publish")
     
     def set_default_publish_rate(self, hz: float) -> None:
         if hz > 0:
@@ -135,11 +144,11 @@ class DDSManager:
             for name in self.objects.keys():
                 if name not in self._pub_interval:
                     self._pub_interval[name] = self._default_pub_interval
-            print(f"[DDSManager] default publish rate set to {hz}Hz")
+            logger_manager.log(LogLevel.DEBUG, f"Default publish rate set to {hz}Hz", LogCategory.SYSTEM, "dds_publish")
 
     def _publish_loop(self) -> None:
         """Publish loop thread"""
-        print("[DDSManager] publish loop thread started")
+        logger_manager.log(LogLevel.DEBUG, "Publish loop thread started", LogCategory.SYSTEM, "dds_publish")
         
         while self.publishing_running:
             try:
@@ -155,7 +164,7 @@ class DDSManager:
                         try:
                             obj.dds_publisher()
                         except Exception as e:
-                            print(f"[DDSManager] object '{name}' publish failed: {e}")
+                            logger_manager.log(LogLevel.WARNING, f"Object '{name}' publish failed: {e}", LogCategory.SYSTEM, "dds_publish")
                         # schedule next
                         self._pub_next_ts[name] = now + interval
                     # track earliest due
@@ -170,10 +179,10 @@ class DDSManager:
                     time.sleep(0.001)
                 
             except Exception as e:
-                print(f"[DDSManager] publish loop error: {e}")
+                logger_manager.log_error(e, "publish loop", LogCategory.SYSTEM, "dds_publish")
                 time.sleep(0.01)
         
-        print("[DDSManager] publish loop thread stopped")
+        logger_manager.log(LogLevel.DEBUG, "Publish loop thread stopped", LogCategory.SYSTEM, "dds_publish")
     
     def start_publishing(self,enable_publish_names:List[str]=None):
         """Start publishing"""
@@ -188,7 +197,7 @@ class DDSManager:
         self.publish_thread = threading.Thread(target=self._publish_loop)
         self.publish_thread.daemon = True
         self.publish_thread.start()
-        print(f"[DDSManager] manager started, managing {len(self._pub_list)} publishing objects")
+        logger_manager.log(LogLevel.INFO, f"Manager started, managing {len(self._pub_list)} publishing objects", LogCategory.SYSTEM, "dds_publish")
     def stop_publishing(self):
         """Stop publishing"""
         for name, obj in self.objects.items():

@@ -22,7 +22,7 @@ class CameraBaseCfg:
     def get_camera_config(
         cls,
         prim_path: str = "/World/envs/env_.*/Robot/d435_link/front_cam",
-        update_period: float = 0.02,
+        update_period: float = None,  # 动态设置，默认None
         height: int = 480,
         width: int =  640,
         focal_length: float = 7.6,
@@ -53,6 +53,15 @@ class CameraBaseCfg:
         """
         if data_types is None:
             data_types = ["rgb"]
+
+        # 动态设置update_period，如果为None则从环境变量获取
+        if update_period is None:
+            # 根据任务类型和性能需求动态设置
+            task_type = os.getenv("TASK_TYPE", "default")
+            if task_type in ["replay", "evaluation"]:
+                update_period = 0.1  # 降低频率节省资源
+            else:
+                update_period = 0.02  # 默认高频
 
         return CameraCfg(
             prim_path=prim_path,

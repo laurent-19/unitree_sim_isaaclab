@@ -53,8 +53,9 @@ class MultiImageWriter:
             jpeg_quality: JPEG quality (0-100)
             skip_cvtcolor: whether to skip color conversion
         """
-        # 50 FPS 限速（避免高频阻塞主循环）
-        self._min_interval_sec = 1.0 / 50.0
+        # 动态FPS限速（根据质量要求调整）
+        self._target_fps = 30 if enable_jpeg and jpeg_quality < 90 else 50
+        self._min_interval_sec = 1.0 / self._target_fps
         self._last_write_ts_ms = 0
 
         # 压缩与颜色空间配置（由主进程注入）
@@ -62,15 +63,26 @@ class MultiImageWriter:
         self._jpeg_quality = int(jpeg_quality)
         self._skip_cvtcolor = bool(skip_cvtcolor)
 
+        # 质量自适应配置
+        self._adaptive_quality = True
+        self._quality_history = []
+        self._compression_ratio_target = 0.3  # 目标压缩率
+
         # 为每个图像维护独立的共享内存
         self.shms = {}  # image_name -> SharedMemory
-        print(f"[MultiImageWriter] Initialized with separate SHM per image")
+        print(f"[MultiImageWriter] Initialized with separate SHM per image, target FPS: {self._target_fps}")
 
     def set_options(self, *, enable_jpeg: Optional[bool] = None, jpeg_quality: Optional[int] = None, skip_cvtcolor: Optional[bool] = None):
         if enable_jpeg is not None:
             self._enable_jpeg = bool(enable_jpeg)
+            # 根据JPEG启用状态调整FPS
+            self._target_fps = 30 if self._enable_jpeg and self._jpeg_quality < 90 else 50
+            self._min_interval_sec = 1.0 / self._target_fps
         if jpeg_quality is not None:
             self._jpeg_quality = int(jpeg_quality)
+            # 高质量时提高FPS，低质量时降低FPS节省带宽
+            self._target_fps = 30 if self._jpeg_quality < 90 else 50
+            self._min_interval_sec = 1.0 / self._target_fps
         if skip_cvtcolor is not None:
             self._skip_cvtcolor = bool(skip_cvtcolor)
 
@@ -86,7 +98,7 @@ class MultiImageWriter:
         if not images:
             return False
 
-        # 轻量限速：最多 50 FPS，直接跳过多余写入，避免阻塞主循环
+        # 动态限速：根据质量要求调整FPS，直接跳过多余写入，避免阻塞主循环
         now_ms = int(time.time() * 1000)
         if self._last_write_ts_ms and (now_ms - self._last_write_ts_ms) < int(self._min_interval_sec * 1000):
             return True

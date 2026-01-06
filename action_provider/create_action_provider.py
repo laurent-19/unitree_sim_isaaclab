@@ -14,12 +14,12 @@ def create_action_provider(env,args):
             env=env,
             args_cli=args
         )
-    elif args.action_source == "dds_wholebody":
+    elif args.action_source in ["dds_wholebody", "policy"]:
         return DDSRLActionProvider(
             env=env,
             args_cli=args
         )
-    elif args.action_source == "replay":
+    elif args.action_source in ["replay", "file", "trajectory"]:
         return FileActionProviderReplay(env=env,args_cli=args)
     else:
         print(f"unknown action source: {args.action_source}")

@@ -11,6 +11,7 @@ from typing import List, Optional
 import numpy as np
 import time
 from tools.data_convert import convert_to_gripper_range
+from tools.logger_manager import logger_manager, LogCategory, LogLevel
 class FileActionProviderReplay(ActionProvider):
     """Action provider based on DDS"""
     
@@ -35,14 +36,14 @@ class FileActionProviderReplay(ActionProvider):
         if self.generate_data:
             try:
                 self.multi_image_reader = MultiImageReader()
-                print(f"[{self.name}] MultiImageReader created")
+                logger_manager.log(LogLevel.INFO, "MultiImageReader created", LogCategory.SYSTEM, "replay_provider")
             except Exception as e:
-                print(f"[{self.name}] MultiImageReader creation failed: {e}")
-                print(f"[{self.name}] Image data saving will be disabled")
+                logger_manager.log(LogLevel.WARNING, f"MultiImageReader creation failed: {e}", LogCategory.SYSTEM, "replay_provider")
+                logger_manager.log(LogLevel.WARNING, "Image data saving will be disabled", LogCategory.SYSTEM, "replay_provider")
                 self.multi_image_reader = None
             
             self.recorder = EpisodeWriter(task_dir = self.generate_data_dir, frequency = 30, rerun_log = True)
-        print(f"FileActionProviderReplay init ok")
+        logger_manager.log(LogLevel.INFO, "FileActionProviderReplay initialized", LogCategory.SYSTEM, "replay_provider")
         
 
         device = self.env.device
@@ -223,7 +224,7 @@ class FileActionProviderReplay(ActionProvider):
             return None
             
         except Exception as e:
-            print(f"[{self.name}] Get DDS action failed: {e}")
+            logger_manager.log(LogLevel.WARNING, f"Get DDS action failed: {e}", LogCategory.SYSTEM, "replay_provider")
             return None
     
 
@@ -234,7 +235,7 @@ class FileActionProviderReplay(ActionProvider):
         if self.recorder:
             self.recorder.close()
         self.is_running = False
-        print(f"[{self.name}] Resource cleanup completed")
+        logger_manager.log(LogLevel.INFO, "Resource cleanup completed", LogCategory.SYSTEM, "replay_provider")
     def get_state(self,env):
 
         joint_pos = env.scene["robot"].data.joint_pos
@@ -260,7 +261,7 @@ class FileActionProviderReplay(ActionProvider):
             if image is not None:
                 images[name] = image
             else:
-                print(f"Warning: {name} image not available in shared memory")
+                logger_manager.log(LogLevel.WARNING, f"{name} image not available in shared memory", LogCategory.CAMERA, "replay_provider")
 
         # Check if we have the expected number of images
         if len(images) != image_count:
