@@ -40,7 +40,7 @@ fi
 
 # 6. Return to parent directory and delete original folder
 cd ..
-echo "Deleting unitree_sim_isaaclab_usds folder..."
-rm -rf unitree_sim_isaaclab_usds
+#echo "Deleting unitree_sim_isaaclab_usds folder..."
+#rm -rf unitree_sim_isaaclab_usds
 
 echo "✅ All done!"

@@ -19,7 +19,7 @@ from isaaclab.assets import ArticulationCfg
 from . import mdp
 # use Isaac Lab native event system
 
-from tasks.common_config import  G1RobotPresets, CameraPresets  # isort: skip
+from tasks.common_config import  G1RobotPresets, CameraPresets, InspireHandContactSensorCfg  # isort: skip
 from tasks.common_event.event_manager import SimpleEvent, SimpleEventManager
 
 # import public scene configuration
@@ -40,8 +40,10 @@ class ObjectTableSceneCfg(TableCylinderSceneCfg):
     # 5. humanoid robot configuration 
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_inspire_base_fix()
 
+    # 6. add contact sensor for finger force feedback (maps to FORCE_ACT register 1582)
+    contact_forces = InspireHandContactSensorCfg.all_fingers()
 
-    # 6. add camera configuration 
+    # 7. add camera configuration 
     front_camera = CameraPresets.g1_front_camera()
     left_wrist_camera = CameraPresets.left_inspire_wrist_camera()
     right_wrist_camera = CameraPresets.right_inspire_wrist_camera()
@@ -147,6 +149,10 @@ class PickPlaceG129InspireBaseFixEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
         self.sim.physx.friction_correlation_distance = 0.00625
+        
+        # Contact sensor update period (for FORCE_ACT register 1582 simulation)
+        self.scene.contact_forces.update_period = self.sim.dt
+        
         # create event manager
         self.event_manager = SimpleEventManager()
 

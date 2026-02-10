@@ -40,13 +40,16 @@ class InspireDDS(DDSObject):
         
         self._initialized = True
         
-        # setup the shared memory
+        # setup the shared memory (increased size for contact force data)
         self.setup_shared_memory(
             input_shm_name="isaac_inspire_state",  # read the state of the gripper from Isaac Lab
-            input_size=1024,
+            input_size=4096,  # increased for contact force data
             output_shm_name="isaac_inspire_cmd",  # output the command to Isaac Lab
             output_size=1024,  # output the command to Isaac Lab
         )
+        
+        # Initialize contact force publisher for finger forces
+        self.force_publisher = None
         
         print(f"[{self.node_name}] Inspire Hand DDS node initialized")
     
@@ -80,9 +83,17 @@ class InspireDDS(DDSObject):
         
         Expected data format:
         {
-            "positions": [2 gripper joint positions] (Isaac Lab joint angle range [-0.02, 0.03])
-            "velocities": [2 gripper joint velocities],
-            "torques": [2 gripper joint torques]
+            "positions": [12 joint positions] (Isaac Lab joint angles)
+            "velocities": [12 joint velocities],
+            "torques": [12 joint torques],
+            "contact_forces": [6 finger contact force magnitudes] (optional)
+                - Index 0: L_index finger force
+                - Index 1: L_middle finger force  
+                - Index 2: L_ring finger force
+                - Index 3: L_pinky finger force
+                - Index 4: L_thumb finger force
+                - Index 5: L_palm force
+                (Indices 6-11 for right hand if available)
         }
         """
         try:
@@ -93,6 +104,9 @@ class InspireDDS(DDSObject):
                 positions = data["positions"]
                 velocities = data["velocities"]
                 torques = data["torques"]
+                # Get contact forces if available (maps to FORCE_ACT register 1582)
+                contact_forces = data.get("contact_forces", [])
+                
                 for i in range(min(12, len(positions))):
                     if i < len(self.inspire_hand_state.states):
                         # convert the Isaac Lab joint angle to the gripper control value    
@@ -107,6 +121,11 @@ class InspireDDS(DDSObject):
                             self.inspire_hand_state.states[i].dq = float(velocities[i])
                         if i < len(torques):
                             self.inspire_hand_state.states[i].tau_est = float(torques[i])
+                        # Store contact force in reserve field (using temperature field as force proxy)
+                        # Real Inspire hand register 1582: FORCE_ACT - actual force per finger
+                        if i < len(contact_forces):
+                            # Map contact force to motor state (using reserve field)
+                            self.inspire_hand_state.states[i].temperature = int(contact_forces[i] * 100)  # Scale force to int
             
                 self.publisher.Write(self.inspire_hand_state)
             
@@ -166,13 +185,17 @@ class InspireDDS(DDSObject):
             return self.output_shm.read_data()
         return None
     
-    def write_inspire_state(self, positions, velocities, torques):
+    def write_inspire_state(self, positions, velocities, torques, contact_forces=None):
         """Write the gripper state to the shared memory
         
         Args:
             positions: the gripper joint position list or torch.Tensor (Isaac Lab joint angle)
             velocities: the gripper joint velocity list or torch.Tensor  
             torques: the gripper joint torque list or torch.Tensor
+            contact_forces: optional contact force magnitudes per finger (maps to FORCE_ACT register 1582)
+                Expected format: [6 or 12 values] for left hand fingers (and optionally right hand)
+                - Index 0: L_index, 1: L_middle, 2: L_ring, 3: L_pinky, 4: L_thumb, 5: L_palm
+                - Index 6-11: Same order for right hand (if available)
         """
         try:
             # prepare the gripper data
@@ -181,6 +204,12 @@ class InspireDDS(DDSObject):
                 "velocities": velocities.tolist() if hasattr(velocities, 'tolist') else velocities,
                 "torques": torques.tolist() if hasattr(torques, 'tolist') else torques
             }
+            
+            # Add contact forces if provided (FORCE_ACT - register 1582)
+            if contact_forces is not None:
+                inspire_hand_data["contact_forces"] = (
+                    contact_forces.tolist() if hasattr(contact_forces, 'tolist') else contact_forces
+                )
             
             # write the input shared memory for publishing
             if self.input_shm:

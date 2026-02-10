@@ -5,6 +5,7 @@
 
 from .robot_configs import RobotBaseCfg, H12RobotPresets, RobotJointTemplates,G1RobotPresets
 from .camera_configs import CameraBaseCfg, CameraPresets
+from .contact_sensor_configs import InspireHandContactSensorCfg, INSPIRE_FINGER_BODY_NAMES
 
 __all__ = [
     "RobotBaseCfg",
@@ -12,5 +13,7 @@ __all__ = [
     "H12RobotPresets",
     "RobotJointTemplates", 
     "CameraBaseCfg",
-    "CameraPresets"
+    "CameraPresets",
+    "InspireHandContactSensorCfg",
+    "INSPIRE_FINGER_BODY_NAMES",
 ] 
