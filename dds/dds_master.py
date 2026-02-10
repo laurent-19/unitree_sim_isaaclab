@@ -57,9 +57,14 @@ class DDSManager:
             return True
         
         try:
-            ChannelFactoryInitialize(1)
+            # Use multicast-capable interface for DDS discovery
+            # lo is not multicast capable, so use physical interface
+            import os
+            network_interface = os.environ.get('DDS_NETWORK_INTERFACE', 'enp0s31f6')
+            print(f"[DDSManager] Initializing DDS on interface: {network_interface}")
+            ChannelFactoryInitialize(1, network_interface)
             self.dds_initialized = True
-            print("[DDSManager] DDS system initialized")
+            print(f"[DDSManager] DDS system initialized on domain 1, interface: {network_interface}")
             return True
         except Exception as e:
             print(f"[DDSManager] DDS system initialization failed: {e}")

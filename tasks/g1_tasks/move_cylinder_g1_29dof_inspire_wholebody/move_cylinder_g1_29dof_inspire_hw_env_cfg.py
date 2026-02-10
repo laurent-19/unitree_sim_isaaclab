@@ -43,7 +43,46 @@ class ObjectTableSceneCfg(TableCylinderSceneCfgWH):
         init_rot=(1, 0, 0, 0))
 
     contact_forces = ContactSensorCfg(prim_path="/World/envs/env_.*/Robot/.*", history_length=10, track_air_time=True, debug_vis=False)
-    # 6. add camera configuration 
+
+    # Tactile contact sensors for Inspire Hand
+    # Left hand fingertips (distal links)
+    left_fingertip_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/L_.*_distal",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Left hand finger pads (intermediate links)
+    left_finger_pad_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/L_.*_intermediate",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Left palm - using left_wrist_yaw as palm proxy (end of wrist chain)
+    left_palm_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/left_wrist_yaw",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right hand fingertips (distal links)
+    right_fingertip_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/R_.*_distal",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right hand finger pads (intermediate links)
+    right_finger_pad_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/R_.*_intermediate",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right palm - using right_wrist_yaw as palm proxy (end of wrist chain)
+    right_palm_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/right_wrist_yaw",
+        history_length=3,
+        debug_vis=False,
+    )
+
+    # 6. add camera configuration
     front_camera = CameraPresets.g1_front_camera()
     left_wrist_camera = CameraPresets.left_inspire_wrist_camera()
     right_wrist_camera = CameraPresets.right_inspire_wrist_camera()
@@ -73,6 +112,7 @@ class ObservationsCfg:
 
         robot_joint_state = ObsTerm(func=mdp.get_robot_boy_joint_states)
         robot_inspire_state = ObsTerm(func=mdp.get_robot_inspire_joint_states)
+        robot_tactile_state = ObsTerm(func=mdp.get_inspire_tactile_state)
         camera_image = ObsTerm(func=mdp.get_camera_image)
 
         def __post_init__(self):
@@ -146,6 +186,13 @@ class MoveCylinderG129InspireWholebodyEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 0.005
         self.scene.contact_forces.update_period = self.sim.dt
+        # Update tactile sensor periods
+        self.scene.left_fingertip_contacts.update_period = self.sim.dt
+        self.scene.left_finger_pad_contacts.update_period = self.sim.dt
+        self.scene.left_palm_contacts.update_period = self.sim.dt
+        self.scene.right_fingertip_contacts.update_period = self.sim.dt
+        self.scene.right_finger_pad_contacts.update_period = self.sim.dt
+        self.scene.right_palm_contacts.update_period = self.sim.dt
         self.sim.render_interval = self.decimation
         self.sim.physx.bounce_threshold_velocity = 0.01
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4

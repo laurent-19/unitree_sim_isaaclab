@@ -14,5 +14,6 @@ sudo docker run --gpus all -it --rm \
   -v /usr/share/glvnd:/usr/share/glvnd:ro \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v $HOME/.Xauthority:/root/.Xauthority:rw \
-  -v /home/analog/unitree_sim_isaaclab:/home/code/unitree_sim_isaaclab \
+  -v /home/analog/develop/unitree_sim_isaaclab:/home/code/unitree_sim_isaaclab \
+  -v /home/analog/develop/inspire_hand_ws:/home/code/inspire_hand_ws \
   unitree-sim:latest /bin/bash

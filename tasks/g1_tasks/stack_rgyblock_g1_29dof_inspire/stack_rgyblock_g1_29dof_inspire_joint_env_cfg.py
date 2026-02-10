@@ -16,6 +16,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
 from isaaclab.assets import ArticulationCfg
+from isaaclab.sensors import ContactSensorCfg
 from . import mdp
 # use Isaac Lab native event system
 
@@ -42,8 +43,45 @@ class ObjectTableSceneCfg(TableRedGreenYellowBlockSceneCfg):
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_inspire_base_fix(init_pos=(-4.2, -3.7, 0.76),
         init_rot=(0.7071, 0, 0, -0.7071))
 
+    # Tactile contact sensors for Inspire Hand
+    # Left hand fingertips (distal links)
+    left_fingertip_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/L_.*_distal",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Left hand finger pads (intermediate links)
+    left_finger_pad_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/L_.*_intermediate",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Left palm - using left_wrist_yaw as palm proxy (end of wrist chain)
+    left_palm_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/left_wrist_yaw",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right hand fingertips (distal links)
+    right_fingertip_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/R_.*_distal",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right hand finger pads (intermediate links)
+    right_finger_pad_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/R_.*_intermediate",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right palm - using right_wrist_yaw as palm proxy (end of wrist chain)
+    right_palm_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/right_wrist_yaw",
+        history_length=3,
+        debug_vis=False,
+    )
 
-    # 6. add camera configuration 
+    # 6. add camera configuration
     front_camera = CameraPresets.g1_front_camera()
     left_wrist_camera = CameraPresets.left_inspire_wrist_camera()
     right_wrist_camera = CameraPresets.right_inspire_wrist_camera()
@@ -72,10 +110,11 @@ class ObservationsCfg:
         """
         # 1. robot joint state observation
         robot_joint_state = ObsTerm(func=mdp.get_robot_boy_joint_states)
-        # 2. gripper joint state observation 
+        # 2. gripper joint state observation
         robot_inspire_state = ObsTerm(func=mdp.get_robot_inspire_joint_states)
-
-        # 3. camera image observation
+        # 3. tactile state observation
+        robot_tactile_state = ObsTerm(func=mdp.get_inspire_tactile_state)
+        # 4. camera image observation
         camera_image = ObsTerm(func=mdp.get_camera_image)
 
         def __post_init__(self):
@@ -171,6 +210,13 @@ class StackRgyBlockG129InspireBaseFixEnvCfg(ManagerBasedRLEnvCfg):
         # simulation settings
         self.sim.dt = 0.005
         self.sim.render_interval = self.decimation
+        # Update tactile sensor periods
+        self.scene.left_fingertip_contacts.update_period = self.sim.dt
+        self.scene.left_finger_pad_contacts.update_period = self.sim.dt
+        self.scene.left_palm_contacts.update_period = self.sim.dt
+        self.scene.right_fingertip_contacts.update_period = self.sim.dt
+        self.scene.right_finger_pad_contacts.update_period = self.sim.dt
+        self.scene.right_palm_contacts.update_period = self.sim.dt
         self.sim.physx.bounce_threshold_velocity = 0.01
         self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
         self.sim.physx.gpu_total_aggregate_pairs_capacity = 32 * 1024
