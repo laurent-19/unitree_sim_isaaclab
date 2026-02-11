@@ -42,26 +42,31 @@ class InspireTouchDDS(DDSObject):
     """Publishes tactile data matching real inspire_hand_touch format.
 
     This class receives tactile data via shared memory from Isaac Lab
-    and publishes it to the DDS topic rt/inspire/touch in the same
+    and publishes it to the DDS topic rt/inspire_hand/touch/{l,r} in the same
     format as the real RH56DFTP hand's tactile sensors.
     """
 
-    def __init__(self, node_name: str = "inspire_touch"):
+    def __init__(self, node_name: str = "inspire_touch", lr: str = 'r'):
         """Initialize the Inspire Touch DDS node.
 
         Args:
             node_name: Name identifier for this DDS node
+            lr: Hand side, 'l' for left or 'r' for right
         """
         if hasattr(self, '_initialized'):
             return
 
         super().__init__()
         self.node_name = node_name
+        self.lr = lr.lower()
+        if self.lr not in ('l', 'r'):
+            raise ValueError(f"lr must be 'l' or 'r', got '{lr}'")
+
         self._initialized = True
 
         # Setup shared memory for receiving tactile data from Isaac Lab
         self.setup_shared_memory(
-            input_shm_name="isaac_inspire_touch",
+            input_shm_name=f"isaac_inspire_touch_{self.lr}",
             input_size=8192,  # Sufficient for all taxel data
             output_shm_name=None,
             output_size=0,
@@ -69,7 +74,7 @@ class InspireTouchDDS(DDSObject):
             outputshm_flag=False,
         )
 
-        print(f"[{self.node_name}] Inspire Touch DDS node initialized")
+        print(f"[{self.node_name}] Inspire Touch DDS node initialized (side={self.lr})")
 
     def setup_publisher(self) -> bool:
         """Setup the DDS publisher for tactile data."""
@@ -78,9 +83,10 @@ class InspireTouchDDS(DDSObject):
             return False
 
         try:
-            self.publisher = ChannelPublisher("rt/inspire/touch", inspire_hand_touch)
+            topic = f"rt/inspire_hand/touch/{self.lr}"
+            self.publisher = ChannelPublisher(topic, inspire_hand_touch)
             self.publisher.Init()
-            print(f"[{self.node_name}] Tactile publisher initialized on rt/inspire/touch")
+            print(f"[{self.node_name}] Tactile publisher initialized on {topic}")
             return True
         except Exception as e:
             print(f"[{self.node_name}] Failed to initialize publisher: {e}")

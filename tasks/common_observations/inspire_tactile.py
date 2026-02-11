@@ -38,28 +38,29 @@ FINGER_ORDER = ["pinky", "ring", "middle", "index", "thumb"]
 
 # Module-level cache for DDS and timing
 _tactile_cache = {
-    "dds": None,
+    "dds": {"l": None, "r": None},
     "dds_initialized": False,
     "last_publish_ms": 0,
     "publish_interval_ms": 20,  # 50Hz publishing rate
 }
 
 
-def _get_touch_dds():
-    """Get the inspire_touch DDS instance with lazy initialization."""
+def _get_touch_dds_instances():
+    """Get the inspire_touch DDS instances for both hands with lazy initialization."""
     global _tactile_cache
 
-    # Always try to get DDS if we don't have it yet
-    if _tactile_cache["dds"] is None:
+    # Always try to get DDS if we don't have them yet
+    if _tactile_cache["dds"]["l"] is None or _tactile_cache["dds"]["r"] is None:
         try:
             sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dds'))
             from dds.dds_master import dds_manager
-            _tactile_cache["dds"] = dds_manager.get_object("inspire_touch")
-            if _tactile_cache["dds"]:
-                print("[inspire_tactile] DDS touch instance obtained")
+            _tactile_cache["dds"]["l"] = dds_manager.get_object("inspire_touch_l")
+            _tactile_cache["dds"]["r"] = dds_manager.get_object("inspire_touch_r")
+            if _tactile_cache["dds"]["l"] or _tactile_cache["dds"]["r"]:
+                print(f"[inspire_tactile] DDS touch instances obtained: L={_tactile_cache['dds']['l'] is not None}, R={_tactile_cache['dds']['r'] is not None}")
             # Only log failure once
             elif not _tactile_cache["dds_initialized"]:
-                print("[inspire_tactile] DDS touch instance not found (will retry)")
+                print("[inspire_tactile] DDS touch instances not found (will retry)")
         except Exception as e:
             if not _tactile_cache["dds_initialized"]:
                 print(f"[inspire_tactile] DDS init failed: {e}")
@@ -125,13 +126,16 @@ def get_inspire_tactile_state(
     if not force_tensors:
         return torch.zeros(batch, 1, device=device)
 
-    # Publish to DDS for first environment
-    if enable_dds and batch > 0 and "left_tips" in sensor_data:
-        _publish_tactile_to_dds(sensor_data)
-    elif not _tactile_cache.get("no_data_logged"):
-        # Log once why publishing isn't happening
-        print(f"[inspire_tactile] Not publishing: enable_dds={enable_dds}, batch={batch}, left_tips={'left_tips' in sensor_data}, sensors={list(sensor_data.keys())}")
-        _tactile_cache["no_data_logged"] = True
+    # Publish to DDS for first environment (both left and right hands)
+    if enable_dds and batch > 0:
+        has_left = "left_tips" in sensor_data
+        has_right = "right_tips" in sensor_data
+        if has_left or has_right:
+            _publish_tactile_to_dds(sensor_data)
+        elif not _tactile_cache.get("no_data_logged"):
+            # Log once why publishing isn't happening
+            print(f"[inspire_tactile] Not publishing: no sensor data, sensors={list(sensor_data.keys())}")
+            _tactile_cache["no_data_logged"] = True
 
     # Concatenate all forces for RL observation
     all_forces = torch.cat(force_tensors, dim=-1)
@@ -139,7 +143,7 @@ def get_inspire_tactile_state(
 
 
 def _publish_tactile_to_dds(sensor_data: Dict[str, torch.Tensor]):
-    """Publish tactile data to DDS with rate limiting.
+    """Publish tactile data to DDS with rate limiting for both hands.
 
     Args:
         sensor_data: Dictionary mapping sensor names to force tensors
@@ -151,16 +155,24 @@ def _publish_tactile_to_dds(sensor_data: Dict[str, torch.Tensor]):
     if now_ms - _tactile_cache["last_publish_ms"] < _tactile_cache["publish_interval_ms"]:
         return
 
-    dds = _get_touch_dds()
-    if not dds:
+    dds_instances = _get_touch_dds_instances()
+    if not dds_instances["l"] and not dds_instances["r"]:
         if not _tactile_cache.get("no_dds_logged"):
-            print("[inspire_tactile] DDS object not available for publishing")
+            print("[inspire_tactile] DDS objects not available for publishing")
             _tactile_cache["no_dds_logged"] = True
         return
 
     try:
-        tactile_data = _build_tactile_message(sensor_data)
-        dds.write_tactile_data(tactile_data)
+        # Publish left hand tactile data
+        if dds_instances["l"] and "left_tips" in sensor_data:
+            left_data = _build_tactile_message(sensor_data, side="left")
+            dds_instances["l"].write_tactile_data(left_data)
+
+        # Publish right hand tactile data
+        if dds_instances["r"] and "right_tips" in sensor_data:
+            right_data = _build_tactile_message(sensor_data, side="right")
+            dds_instances["r"].write_tactile_data(right_data)
+
         _tactile_cache["last_publish_ms"] = now_ms
         # Log first publish
         if not _tactile_cache.get("first_write_logged"):
@@ -170,24 +182,25 @@ def _publish_tactile_to_dds(sensor_data: Dict[str, torch.Tensor]):
         print(f"[inspire_tactile] Failed to publish tactile data: {e}")
 
 
-def _build_tactile_message(sensor_data: Dict[str, torch.Tensor]) -> Dict[str, list]:
+def _build_tactile_message(sensor_data: Dict[str, torch.Tensor], side: str = "left") -> Dict[str, list]:
     """Build tactile message dictionary from sensor forces.
 
     Args:
-        sensor_data: Dictionary with keys like 'left_tips', 'left_pads', 'left_palm'
+        sensor_data: Dictionary with keys like '{side}_tips', '{side}_pads', '{side}_palm'
                     Values are tensors of shape (num_envs, num_bodies, 3)
+        side: Which hand to build the message for ('left' or 'right')
 
     Returns:
         Dictionary matching inspire_hand_touch IDL field names
     """
     tactile_data = {}
 
-    # Get forces from first environment
-    left_tips = sensor_data.get("left_tips")
-    left_pads = sensor_data.get("left_pads")
-    left_palm = sensor_data.get("left_palm")
+    # Get forces from first environment for the specified side
+    tips = sensor_data.get(f"{side}_tips")
+    pads = sensor_data.get(f"{side}_pads")
+    palm = sensor_data.get(f"{side}_palm")
 
-    if left_tips is None:
+    if tips is None:
         return tactile_data
 
     # Process each finger
@@ -195,8 +208,8 @@ def _build_tactile_message(sensor_data: Dict[str, torch.Tensor]) -> Dict[str, li
         idl_name = FINGER_MAP[finger]
 
         # Get force vectors (first env only)
-        if i < left_tips.shape[1]:
-            tip_force = left_tips[0, i].cpu().numpy()
+        if i < tips.shape[1]:
+            tip_force = tips[0, i].cpu().numpy()
         else:
             tip_force = np.zeros(3)
 
@@ -209,8 +222,8 @@ def _build_tactile_message(sensor_data: Dict[str, torch.Tensor]) -> Dict[str, li
         tactile_data[f"{idl_name}_top_touch"] = flatten_taxel_grid(nail_grid)
 
         # Pad region from intermediate link
-        if left_pads is not None and i < left_pads.shape[1]:
-            pad_force = left_pads[0, i].cpu().numpy()
+        if pads is not None and i < pads.shape[1]:
+            pad_force = pads[0, i].cpu().numpy()
         else:
             pad_force = np.zeros(3)
 
@@ -227,8 +240,8 @@ def _build_tactile_message(sensor_data: Dict[str, torch.Tensor]) -> Dict[str, li
             tactile_data[f"{idl_name}_palm_touch"] = flatten_taxel_grid(pad_grid)
 
     # Palm region (8x14 = 112 taxels)
-    if left_palm is not None and left_palm.shape[1] > 0:
-        palm_force = left_palm[0, 0].cpu().numpy()
+    if palm is not None and palm.shape[1] > 0:
+        palm_force = palm[0, 0].cpu().numpy()
     else:
         palm_force = np.zeros(3)
 

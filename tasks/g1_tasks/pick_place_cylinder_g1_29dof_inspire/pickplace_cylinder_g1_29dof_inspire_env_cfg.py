@@ -15,8 +15,9 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.utils import configclass
-from isaaclab.assets import ArticulationCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.sensors import ContactSensorCfg
+import isaaclab.sim as sim_utils
 from . import mdp
 # use Isaac Lab native event system
 
@@ -36,45 +37,82 @@ class ObjectTableSceneCfg(TableCylinderSceneCfg):
     inherits from G1SingleObjectSceneCfg, gets the complete G1 robot scene configuration
     can add task-specific scene elements or override default configurations here
     """
-    
+
     # Humanoid robot w/ arms higher
-    # 5. humanoid robot configuration 
+    # 5. humanoid robot configuration
     robot: ArticulationCfg = G1RobotPresets.g1_29dof_inspire_base_fix()
 
+    # Override cylinder position to be within hand reach for tactile testing
+    # Robot is at (-0.15, 0.0, 0.76), move cylinder very close to hands
+    object = RigidObjectCfg(
+        prim_path="/World/envs/env_.*/Object",
+        init_state=RigidObjectCfg.InitialStateCfg(
+            pos=(-0.15, 0.20, 0.85),  # Much closer: y=0.20, lower height
+            rot=[1, 0, 0, 0]
+        ),
+        spawn=sim_utils.CylinderCfg(
+            radius=0.025,    # Slightly larger for easier grasping
+            height=0.12,     # Short cylinder
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(),
+            mass_props=sim_utils.MassPropertiesCfg(mass=0.1),  # Light
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.8, 0.2, 0.2), metallic=0.5),
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.5,
+                dynamic_friction=1.5,
+                restitution=0.0,
+            ),
+        ),
+    )
+
     # Tactile contact sensors for Inspire Hand
-    # Left hand fingertips (distal links)
+    # Note: Inspire hand has 2 joints per finger (proximal, intermediate) except thumb which has 3 (+ distal)
+    # So fingertips for index/middle/ring/pinky are the intermediate links
+    # Left hand fingertips: intermediate links for fingers + distal for thumb
     left_fingertip_contacts = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/L_.*_distal",
+        prim_path="/World/envs/env_.*/Robot/L_(index|middle|ring|pinky)_intermediate",
         history_length=3,
         debug_vis=False,
     )
-    # Left hand finger pads (intermediate links)
+    # Left thumb tip (separate because it has distal link)
+    left_thumb_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/L_thumb_distal",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Left hand finger pads (proximal links)
     left_finger_pad_contacts = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/L_.*_intermediate",
+        prim_path="/World/envs/env_.*/Robot/L_(index|middle|ring|pinky)_proximal",
         history_length=3,
         debug_vis=False,
     )
-    # Left palm proxy - using finger proximal (base) links near palm
+    # Left palm - use all proximal links as palm proxy (no separate palm link exists)
     left_palm_contacts = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/L_.*_proximal",
+        prim_path="/World/envs/env_.*/Robot/L_thumb_proximal",
         history_length=3,
         debug_vis=False,
     )
-    # Right hand fingertips (distal links)
+    # Right hand fingertips: intermediate links for fingers + distal for thumb
     right_fingertip_contacts = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/R_.*_distal",
+        prim_path="/World/envs/env_.*/Robot/R_(index|middle|ring|pinky)_intermediate",
         history_length=3,
         debug_vis=False,
     )
-    # Right hand finger pads (intermediate links)
+    # Right thumb tip (separate because it has distal link)
+    right_thumb_contacts = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/R_thumb_distal",
+        history_length=3,
+        debug_vis=False,
+    )
+    # Right hand finger pads (proximal links)
     right_finger_pad_contacts = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/R_.*_intermediate",
+        prim_path="/World/envs/env_.*/Robot/R_(index|middle|ring|pinky)_proximal",
         history_length=3,
         debug_vis=False,
     )
-    # Right palm proxy - using finger proximal (base) links near palm
+    # Right palm - use thumb proximal as palm proxy (no separate palm link exists)
     right_palm_contacts = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/Robot/R_.*_proximal",
+        prim_path="/World/envs/env_.*/Robot/R_thumb_proximal",
         history_length=3,
         debug_vis=False,
     )
@@ -183,9 +221,11 @@ class PickPlaceG129InspireBaseFixEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         # Update tactile sensor periods
         self.scene.left_fingertip_contacts.update_period = self.sim.dt
+        self.scene.left_thumb_contacts.update_period = self.sim.dt
         self.scene.left_finger_pad_contacts.update_period = self.sim.dt
         self.scene.left_palm_contacts.update_period = self.sim.dt
         self.scene.right_fingertip_contacts.update_period = self.sim.dt
+        self.scene.right_thumb_contacts.update_period = self.sim.dt
         self.scene.right_finger_pad_contacts.update_period = self.sim.dt
         self.scene.right_palm_contacts.update_period = self.sim.dt
         self.sim.physx.bounce_threshold_velocity = 0.01

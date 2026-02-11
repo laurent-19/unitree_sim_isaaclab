@@ -45,41 +45,91 @@ def get_robot_girl_joint_names() -> list[str]:
         "L_thumb_proximal_yaw_joint",
     ]
 
-# global variable to cache the DDS instance
-_inspire_dds = None
+# global variable to cache the DDS instances for left and right hands
+_inspire_dds = {'l': None, 'r': None}
 _dds_initialized = False
 
-def _get_inspire_dds_instance():
-    """get the DDS instance, delay initialization"""
+def _get_inspire_dds_instances():
+    """get the DDS instances for both hands, delay initialization"""
     global _inspire_dds, _dds_initialized
-    
-    if not _dds_initialized or _inspire_dds is None:
+
+    if not _dds_initialized:
         try:
             # dynamically import the DDS module
             sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dds'))
             from dds.dds_master import dds_manager
-            _inspire_dds = dds_manager.get_object("inspire")
-            print("[Observations] DDS communication instance obtained")
-            
+
+            _inspire_dds['l'] = dds_manager.get_object("inspire_l")
+            _inspire_dds['r'] = dds_manager.get_object("inspire_r")
+
+            if _inspire_dds['l'] or _inspire_dds['r']:
+                print(f"[inspire_state] DDS instances obtained: L={_inspire_dds['l'] is not None}, R={_inspire_dds['r'] is not None}")
+
             # register the cleanup function
             import atexit
             def cleanup_dds():
                 try:
-                    if _inspire_dds:
-                        dds_manager.unregister_object("inspire")
-                        print("[gripper_state] DDS communication closed correctly")
+                    from dds.dds_master import dds_manager
+                    for side in ['l', 'r']:
+                        if _inspire_dds[side]:
+                            dds_manager.unregister_object(f"inspire_{side}")
+                    print("[inspire_state] DDS communication closed correctly")
                 except Exception as e:
-                    print(f"[gripper_state] Error closing DDS: {e}")
+                    print(f"[inspire_state] Error closing DDS: {e}")
             atexit.register(cleanup_dds)
-            
+
+            # Only mark as initialized if we got at least one instance
+            if _inspire_dds['l'] or _inspire_dds['r']:
+                _dds_initialized = True
+
         except Exception as e:
-            print(f"[Observations] Failed to get DDS instances: {e}")
-            _inspire_dds = None
-        
-        _dds_initialized = True
-    
+            print(f"[inspire_state] Failed to get DDS instances: {e}")
+
     return _inspire_dds
 
+
+
+def _get_contact_forces(env, side: str) -> torch.Tensor:
+    """Get contact forces from fingertip sensors for force_act.
+
+    Args:
+        env: ManagerBasedRLEnv instance
+        side: 'left' or 'right'
+
+    Returns:
+        Tensor of shape (batch, 6) with force magnitudes in Newtons for each finger
+        Order: pinky, ring, middle, index, thumb_bend, thumb_rot (thumb uses same force for both)
+    """
+    fingertip_sensor = f"{side}_fingertip_contacts"  # index, middle, ring, pinky intermediate links
+    thumb_sensor = f"{side}_thumb_contacts"  # thumb distal link
+    batch = env.num_envs
+    device = env.device
+
+    # Default to zeros
+    forces = torch.zeros(batch, 6, device=device)
+
+    # Get finger forces (pinky, ring, middle, index from intermediate links)
+    # Sensor body order depends on how regex matches - typically alphabetical
+    # Expected order: index, middle, pinky, ring (alphabetical)
+    if fingertip_sensor in env.scene.sensors:
+        net_forces = env.scene[fingertip_sensor].data.net_forces_w
+        # Map sensor indices to our order: pinky(0), ring(1), middle(2), index(3)
+        # Alphabetical regex match: index(0), middle(1), pinky(2), ring(3)
+        sensor_to_force_idx = {0: 3, 1: 2, 2: 0, 3: 1}  # sensor_idx -> force_idx
+        for sensor_idx, force_idx in sensor_to_force_idx.items():
+            if sensor_idx < net_forces.shape[1]:
+                force_magnitude = torch.norm(net_forces[:, sensor_idx, :], dim=-1)
+                forces[:, force_idx] = force_magnitude
+
+    # Get thumb force (from distal link)
+    if thumb_sensor in env.scene.sensors:
+        thumb_forces = env.scene[thumb_sensor].data.net_forces_w
+        if thumb_forces.shape[1] > 0:
+            thumb_force = torch.norm(thumb_forces[:, 0, :], dim=-1)
+            forces[:, 4] = thumb_force  # thumb_bend
+            forces[:, 5] = thumb_force  # thumb_rot (same force)
+
+    return forces
 
 
 def get_robot_inspire_joint_states(
@@ -87,20 +137,24 @@ def get_robot_inspire_joint_states(
     enable_dds: bool = True,
 ) -> torch.Tensor:
     """get the robot gripper joint states and publish them to DDS
-    
+
     Args:
         env: ManagerBasedRLEnv - reinforcement learning environment instance
         enable_dds: bool - whether to enable the DDS publish function
-    
+
     返回:
         torch.Tensor
     """
     # get the gripper joint states
     joint_pos = env.scene["robot"].data.joint_pos
-    joint_vel = env.scene["robot"].data.joint_vel  
+    joint_vel = env.scene["robot"].data.joint_vel
     joint_torque = env.scene["robot"].data.applied_torque
     device = joint_pos.device
     batch = joint_pos.shape[0]
+
+    # Get contact forces from fingertip sensors (for force_act)
+    right_contact_forces = _get_contact_forces(env, "right")
+    left_contact_forces = _get_contact_forces(env, "left")
     
 
     global _obs_cache
@@ -141,16 +195,29 @@ def get_robot_inspire_joint_states(
             import time
             now_ms = int(time.time() * 1000)
             if now_ms - _obs_cache["dds_last_ms"] >= _obs_cache["dds_min_interval_ms"]:
-                inspire_dds = _get_inspire_dds_instance()
-                if inspire_dds:
-                    pos = pos_buf[0].contiguous().cpu().numpy()
-                    vel = vel_buf[0].contiguous().cpu().numpy()
-                    torque = torque_buf[0].contiguous().cpu().numpy()
-                    # write the gripper state to shared memory
-                    inspire_dds.write_inspire_state(pos, vel, torque)
-                    _obs_cache["dds_last_ms"] = now_ms
+                inspire_dds_instances = _get_inspire_dds_instances()
+
+                pos = pos_buf[0].contiguous().cpu().numpy()
+                vel = vel_buf[0].contiguous().cpu().numpy()
+                torque = torque_buf[0].contiguous().cpu().numpy()
+
+                # Get contact forces (in Newtons) for force_act
+                r_forces = right_contact_forces[0].contiguous().cpu().numpy()
+                l_forces = left_contact_forces[0].contiguous().cpu().numpy()
+
+                # Right hand: indices 0-5, Left hand: indices 6-11
+                if inspire_dds_instances['r']:
+                    inspire_dds_instances['r'].write_inspire_state(
+                        pos[:6], vel[:6], torque[:6], r_forces
+                    )
+                if inspire_dds_instances['l']:
+                    inspire_dds_instances['l'].write_inspire_state(
+                        pos[6:12], vel[6:12], torque[6:12], l_forces
+                    )
+
+                _obs_cache["dds_last_ms"] = now_ms
         except Exception as e:
-            print(f"[gripper_state] Failed to write to shared memory: {e}")
+            print(f"[inspire_state] Failed to write to shared memory: {e}")
     
     return pos_buf
 

@@ -18,7 +18,8 @@ class DDSActionProvider(ActionProvider):
         self.robot_dds = None
         self.gripper_dds = None
         self.dex3_dds = None
-        self.inspire_dds = None
+        self.inspire_dds_l = None
+        self.inspire_dds_r = None
         self._setup_dds()
         self._setup_joint_mapping()
     
@@ -35,7 +36,9 @@ class DDSActionProvider(ActionProvider):
             elif self.enable_dex3:
                 self.dex3_dds = dds_manager.get_object("dex3")
             elif self.enable_inspire:
-                self.inspire_dds = dds_manager.get_object("inspire")
+                self.inspire_dds_l = dds_manager.get_object("inspire_l")
+                self.inspire_dds_r = dds_manager.get_object("inspire_r")
+                print(f"[{self.name}] Inspire DDS objects: L={self.inspire_dds_l is not None}, R={self.inspire_dds_r is not None}")
             print(f"[{self.name}] DDS communication initialized")
         except Exception as e:
             print(f"[{self.name}] DDS initialization failed: {e}")
@@ -241,16 +244,30 @@ class DDSActionProvider(ActionProvider):
                             r_vals = self._right_hand_buf.index_select(0, self._right_hand_source_idx_t)
                             full_action.index_copy_(0, self._left_hand_target_idx_t, l_vals)
                             full_action.index_copy_(0, self._right_hand_target_idx_t, r_vals)
-            elif self.inspire_dds:
-                inspire_cmds = self.inspire_dds.get_inspire_hand_command()
-                if inspire_cmds and 'positions' in inspire_cmds:
-                        inspire_cmds_positions = inspire_cmds['positions']
-                        if len(inspire_cmds_positions) >= 12:
-                            self._inspire_buf.copy_(torch.tensor(inspire_cmds_positions[:12], dtype=torch.float32, device=self.env.device))
-                            base_vals = self._inspire_buf.index_select(0, self._inspire_source_idx_t)
-                            full_action.index_copy_(0, self._inspire_target_idx_t, base_vals)
-                            special_vals = self._inspire_buf.index_select(0, self._inspire_special_source_idx_t) * self._inspire_special_scales_t
-                            full_action.index_copy_(0, self._inspire_special_target_idx_t, special_vals)
+            elif self.inspire_dds_l or self.inspire_dds_r:
+                # Combine commands from both hands into a 12-position buffer
+                # Indices 0-5: right hand, indices 6-11: left hand
+                inspire_positions = [0.0] * 12
+
+                if self.inspire_dds_r:
+                    r_cmds = self.inspire_dds_r.get_inspire_hand_command()
+                    if r_cmds and 'positions' in r_cmds:
+                        r_positions = r_cmds['positions']
+                        for i in range(min(6, len(r_positions))):
+                            inspire_positions[i] = r_positions[i]
+
+                if self.inspire_dds_l:
+                    l_cmds = self.inspire_dds_l.get_inspire_hand_command()
+                    if l_cmds and 'positions' in l_cmds:
+                        l_positions = l_cmds['positions']
+                        for i in range(min(6, len(l_positions))):
+                            inspire_positions[6 + i] = l_positions[i]
+
+                self._inspire_buf.copy_(torch.tensor(inspire_positions, dtype=torch.float32, device=self.env.device))
+                base_vals = self._inspire_buf.index_select(0, self._inspire_source_idx_t)
+                full_action.index_copy_(0, self._inspire_target_idx_t, base_vals)
+                special_vals = self._inspire_buf.index_select(0, self._inspire_special_source_idx_t) * self._inspire_special_scales_t
+                full_action.index_copy_(0, self._inspire_special_target_idx_t, special_vals)
             return full_action.unsqueeze(0)
             
         except Exception as e:
@@ -273,7 +290,9 @@ class DDSActionProvider(ActionProvider):
                 self.gripper_dds.stop_communication()
             if self.dex3_dds:
                 self.dex3_dds.stop_communication()
-            if self.inspire_dds:
-                self.inspire_dds.stop_communication()
+            if self.inspire_dds_l:
+                self.inspire_dds_l.stop_communication()
+            if self.inspire_dds_r:
+                self.inspire_dds_r.stop_communication()
         except Exception as e:
             print(f"[{self.name}] Clean up DDS resources failed: {e}")
