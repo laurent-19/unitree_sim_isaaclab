@@ -4,6 +4,12 @@
 #!/usr/bin/env python3
 # main.py
 import os
+import logging
+
+# Suppress verbose debug logs from camera/image server
+logging.getLogger("teleimager").setLevel(logging.WARNING)
+logging.getLogger("image_server").setLevel(logging.WARNING)
+logging.getLogger("IsaacSimCamera").setLevel(logging.WARNING)
 
 project_root = os.path.dirname(os.path.abspath(__file__))
 os.environ["PROJECT_ROOT"] = project_root
@@ -25,8 +31,8 @@ from dds.dds_create import create_dds_objects,create_dds_objects_replay
 # add command line arguments
 parser = argparse.ArgumentParser(description="Unitree Simulation")
 parser.add_argument("--task", type=str, default="Isaac-PickPlace-G129-Head-Waist-Fix", help="task name")
-parser.add_argument("--action_source", type=str, default="dds", 
-                   choices=["dds", "file", "trajectory", "policy", "replay","dds_wholebody"], 
+parser.add_argument("--action_source", type=str, default="dds",
+                   choices=["dds", "file", "trajectory", "policy", "replay","dds_wholebody", "scripted"],
                    help="Action source")
 
 

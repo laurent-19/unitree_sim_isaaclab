@@ -21,17 +21,25 @@ from . import pick_place_redblock_g1_29dof_inspire
 from . import move_cylinder_g1_29dof_dex1_wholebody
 from . import move_cylinder_g1_29dof_dex3_wholebody
 from . import move_cylinder_g1_29dof_inspire_wholebody
+from . import scripted_grasp_inspire
+from . import hand_grasp_inspire
+from . import reach_grasp_rl
+from . import hand_grasp_rl
 
 # export all modules
 __all__ = [
-        "pick_place_cylinder_g1_29dof_dex3", "pick_place_cylinder_g1_29dof_dex1", 
-        "pick_place_redblock_g1_29dof_dex1", "pick_place_redblock_g1_29dof_dex3", 
-        "stack_rgyblock_g1_29dof_dex1", "stack_rgyblock_g1_29dof_dex3", 
+        "pick_place_cylinder_g1_29dof_dex3", "pick_place_cylinder_g1_29dof_dex1",
+        "pick_place_redblock_g1_29dof_dex1", "pick_place_redblock_g1_29dof_dex3",
+        "stack_rgyblock_g1_29dof_dex1", "stack_rgyblock_g1_29dof_dex3",
         "stack_rgyblock_g1_29dof_inspire",
         "pick_redblock_into_drawer_g1_29dof_dex1","pick_redblock_into_drawer_g1_29dof_dex3",
         "pick_place_redblock_g1_29dof_inspire",
         "pick_place_cylinder_g1_29dof_inspire",
         "move_cylinder_g1_29dof_dex1_wholebody",
         "move_cylinder_g1_29dof_dex3_wholebody",
-        "move_cylinder_g1_29dof_inspire_wholebody"
+        "move_cylinder_g1_29dof_inspire_wholebody",
+        "scripted_grasp_inspire",
+        "hand_grasp_inspire",
+        "reach_grasp_rl",
+        "hand_grasp_rl"
 ]
