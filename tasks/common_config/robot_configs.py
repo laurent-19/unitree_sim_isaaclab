@@ -8,7 +8,16 @@ support different robot variants: with/without waist joint, different finger con
 
 from isaaclab.assets import ArticulationCfg
 from isaaclab.utils import configclass
-from robots.unitree import G129_CFG_WITH_DEX1_BASE_FIX,G129_CFG_WITH_DEX3_BASE_FIX,G129_CFG_WITH_INSPIRE_HAND,G129_CFG_WITH_DEX1_WHOLEBODY,G129_CFG_WITH_DEX3_WHOLEBODY,G129_CFG_WITH_INSPIRE_WHOLEBODY,H12_CFG_WITH_INSPIRE_HAND
+from robots.unitree import (
+    G129_CFG_WITH_DEX1_BASE_FIX,
+    G129_CFG_WITH_DEX3_BASE_FIX,
+    G129_CFG_WITH_INSPIRE_HAND,
+    G129_CFG_WITH_DEX1_WHOLEBODY,
+    G129_CFG_WITH_DEX3_WHOLEBODY,
+    G129_CFG_WITH_INSPIRE_WHOLEBODY,
+    G129_CFG_WITH_INSPIRE_HAND_TACSL,
+    H12_CFG_WITH_INSPIRE_HAND,
+)
 from typing import Optional, Dict, Tuple, Literal
 
 
@@ -316,6 +325,26 @@ class G1RobotPresets:
             is_have_hand=False,
             base_config=G129_CFG_WITH_INSPIRE_WHOLEBODY,
             update_default_joint_pos=False )
+
+    @classmethod
+    def g1_29dof_inspire_tacsl(cls, init_pos: Tuple[float, float, float] = (-0.15, 0.0, 0.76),
+        init_rot: Tuple[float, float, float, float] = (0.7071, 0, 0, 0.7071)) -> ArticulationCfg:
+        """TacSL-enabled inspire hand configuration for high-fidelity tactile sensing.
+
+        Requires:
+        - USD asset with elastomer geometry (use tools/create_tactile_elastomers.py)
+        - isaaclab_contrib package for TacSL sensors
+        - TacSL sensor configs in scene (see tasks/common_config/tactile_configs.py)
+
+        Falls back to standard Inspire hand USD if TacSL asset not available.
+        """
+        return RobotBaseCfg.get_base_config(
+            init_pos=init_pos,
+            init_rot=init_rot,
+            include_waist=False,
+            hand_type="inspire",
+            base_config=G129_CFG_WITH_INSPIRE_HAND_TACSL
+        )
 
 @configclass
 class H12RobotPresets:

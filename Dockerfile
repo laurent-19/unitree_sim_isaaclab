@@ -14,6 +14,9 @@ ARG https_proxy
 ENV http_proxy=${http_proxy}
 ENV https_proxy=${https_proxy}
 
+# Isaac Lab version (v2.3.2+ required for TacSL tactile sensors)
+ARG ISAACLAB_VERSION=v2.3.2
+
 # 使用阿里云源
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list && \
     sed -i 's|http://security.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g' /etc/apt/sources.list
@@ -38,7 +41,7 @@ RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkg
     conda clean -afy
 
 # 切换到 Conda 环境
-SHELL ["conda", "run", "-n", "unitree_sim_env", "/bin/bash", "-c"]  
+SHELL ["conda", "run", "-n", "unitree_sim_env", "/bin/bash", "-c"]
 
 
 
@@ -47,22 +50,31 @@ RUN conda install -y -c conda-forge "libgcc-ng>=12" "libstdcxx-ng>=12" && \
 
 
 # 安装 PyTorch（CUDA 12.6 对应）
-RUN pip install --upgrade pip && \
+RUN pip install --upgrade pip setuptools wheel && \
     pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu126
 
 
-# 安装 Isaac Sim
-RUN pip install "isaacsim[all,extscache]==5.0.0" --extra-index-url https://pypi.nvidia.com
+# 安装 Isaac Sim (5.1.0 required for TacSL/Isaac Lab v2.3.2+)
+RUN pip install "isaacsim[all,extscache]==5.1.0" --extra-index-url https://pypi.nvidia.com
 
 # 创建工作目录
 RUN mkdir -p /home/code
 WORKDIR /home/code
 
-# 克隆并安装 IsaacLab
+# Accept NVIDIA Omniverse EULA non-interactively
+ENV OMNI_KIT_ACCEPT_EULA=yes
+ENV ACCEPT_EULA=Y
+
+# 克隆并安装 IsaacLab (v2.3.2+ includes TacSL tactile sensors)
 RUN git clone https://github.com/isaac-sim/IsaacLab.git && \
     cd IsaacLab && \
-    git checkout v2.2.0 && \
-    ./isaaclab.sh --install
+    git fetch --tags && \
+    git checkout ${ISAACLAB_VERSION} && \
+    echo "yes" | ./isaaclab.sh --install
+
+# 安装 isaaclab_contrib (TacSL visuo-tactile sensors)
+RUN cd /home/code/IsaacLab/source/isaaclab_contrib && \
+    pip install -e .
     
 # 构建 CycloneDDS
 RUN git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x /cyclonedds && \
@@ -98,7 +110,7 @@ ENV OMNI_KIT_DISABLE_STARTUP=1
 
 # 安装运行时依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libglu1-mesa git-lfs zenity unzip \
+    libglu1-mesa git-lfs zenity unzip libxt6 \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制 Conda 环境和代码
@@ -112,6 +124,27 @@ COPY --from=builder /home/code/unitree_sim_isaaclab /home/code/unitree_sim_isaac
 
 ENV CYCLONEDDS_HOME=/cyclonedds/install
 
+# Re-install editable packages (symlinks break when copying between stages)
+SHELL ["conda", "run", "-n", "unitree_sim_env", "/bin/bash", "-c"]
+
+# Install setuptools (provides pkg_resources needed by flatdict 4.0.1)
+RUN pip install --upgrade "setuptools>=65.0.0" wheel
+
+# Install IsaacLab packages (flatdict 4.0.1 will build correctly now)
+RUN cd /home/code/IsaacLab/source/isaaclab && pip install -e . && \
+    cd /home/code/IsaacLab/source/isaaclab_tasks && pip install -e . && \
+    cd /home/code/IsaacLab/source/isaaclab_contrib && pip install -e . && \
+    cd /home/code/unitree_sdk2_python && pip install -e .
+
+# Install teleimager submodule
+RUN cd /home/code/unitree_sim_isaaclab && \
+    git config --global --add safe.directory /home/code/unitree_sim_isaaclab && \
+    git submodule update --init --recursive && \
+    cd teleimager && \
+    sed -i 's|requires-python = ">=3.8,<3.11"|requires-python = ">=3.8,<3.12"|' pyproject.toml && \
+    pip install -e . && \
+    pip install aiortc aiohttp
+
 # 写入 bashrc 初始化
 RUN echo 'source /opt/conda/etc/profile.d/conda.sh' >> ~/.bashrc && \
     echo 'conda activate unitree_sim_env' >> ~/.bashrc && \
@@ -120,5 +153,26 @@ RUN echo 'source /opt/conda/etc/profile.d/conda.sh' >> ~/.bashrc && \
 
 WORKDIR /home/code
 
+# Generate TacSL elastomer USD (optional - can also be done at runtime)
+# Uncomment to pre-generate tactile sensor meshes:
+# RUN conda run -n unitree_sim_env python /home/code/unitree_sim_isaaclab/tools/create_tactile_elastomers.py \
+#     --input /home/code/unitree_sim_isaaclab/assets/robots/g1-29dof-inspire-base-fix-usd/g1_29dof_with_inspire_rev_1_0.usd \
+#     --output /home/code/unitree_sim_isaaclab/assets/robots/g1-29dof-inspire-tactile/g1_29dof_with_inspire_tactile.usd
+
 # 默认进入 Conda 环境 bash
 CMD ["conda", "run", "-n", "unitree_sim_env", "/bin/bash"]
+
+# ==============================
+# TacSL Tactile Sensor Usage
+# ==============================
+# After container startup, generate tactile USD (if not pre-generated):
+#   cd /home/code/unitree_sim_isaaclab
+#   python tools/create_tactile_elastomers.py \
+#       --input assets/robots/g1-29dof-inspire-base-fix-usd/g1_29dof_with_inspire_rev_1_0.usd \
+#       --output assets/robots/g1-29dof-inspire-tactile/g1_29dof_with_inspire_tactile.usd
+#
+# Run simulation with TacSL tactile sensors:
+#   python sim_main.py --task Isaac-PickPlace-Cylinder-G129-Inspire-TacSL --enable_inspire_dds
+#
+# Verify TacSL is available:
+#   python -c "from isaaclab_contrib.sensors.tacsl_sensor import VisuoTactileSensorCfg; print('TacSL OK')"

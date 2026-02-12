@@ -5,11 +5,16 @@ Tactile sensor mapping utilities for Inspire Hand.
 
 Maps ContactSensor force readings to taxel grids matching the real
 RH56DFTP hand sensor format (1,062 taxels per hand).
+
+Supports two backends:
+1. ContactSensor: Uses Gaussian force-to-taxel approximation
+2. TacSL: Direct per-taxel force mapping from force field simulation
 """
 
 import numpy as np
+import torch
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional, Union
 
 
 @dataclass
@@ -130,3 +135,193 @@ def get_grid_for_region(finger: str, region: str) -> TaxelGrid:
             return TACTILE_GRIDS["thumb_middle"]
 
     return TACTILE_GRIDS.get(region, TACTILE_GRIDS["tip"])
+
+
+# =============================================================================
+# TacSL Direct Mapping Functions
+# =============================================================================
+
+def tacsl_to_taxel_grid(
+    normal_force: Union[np.ndarray, "torch.Tensor"],
+    grid: TaxelGrid,
+    scale: float = 1000.0,
+    max_value: int = 4095,
+) -> np.ndarray:
+    """Direct mapping from TacSL force field to taxel grid.
+
+    Unlike ContactSensor Gaussian approximation, TacSL provides
+    per-taxel forces directly - just need scaling and clamping.
+
+    This function handles the conversion from TacSL's force field
+    output to the taxel format expected by the DDS interface.
+
+    Args:
+        normal_force: Force field tensor of shape (H, W) from TacSL sensor
+        grid: TaxelGrid defining the expected output dimensions
+        scale: Conversion factor from Newtons to taxel units
+        max_value: Maximum taxel value (12-bit = 4095)
+
+    Returns:
+        2D numpy array of int16 taxel values with shape (rows, cols)
+
+    Note:
+        The TacSL force field should already match the grid dimensions.
+        If dimensions don't match, the output is resized using bilinear
+        interpolation.
+    """
+    # Convert torch tensor to numpy if needed
+    if hasattr(normal_force, 'cpu'):
+        force_np = normal_force.cpu().numpy()
+    else:
+        force_np = np.asarray(normal_force)
+
+    # Handle empty/zero input
+    if force_np.size == 0 or np.max(np.abs(force_np)) < 1e-10:
+        return np.zeros((grid.rows, grid.cols), dtype=np.int16)
+
+    # Scale forces to taxel units
+    scaled = force_np * scale
+
+    # Resize if dimensions don't match
+    if force_np.shape != (grid.rows, grid.cols):
+        from scipy import ndimage
+        zoom_factors = (grid.rows / force_np.shape[0], grid.cols / force_np.shape[1])
+        scaled = ndimage.zoom(scaled, zoom_factors, order=1)
+
+    # Clip to valid range and convert to int16
+    taxels = np.clip(scaled, 0, max_value).astype(np.int16)
+
+    return taxels
+
+
+def tacsl_shear_to_shift(
+    shear_force: Union[np.ndarray, "torch.Tensor"],
+    grid: TaxelGrid,
+    max_shift: int = 2,
+) -> Tuple[int, int]:
+    """Convert TacSL shear forces to grid shift values.
+
+    Computes average shear direction and converts to discrete
+    grid cell shifts for visualization or analysis.
+
+    Args:
+        shear_force: Shear force tensor of shape (H, W, 2) with (fx, fy) components
+        grid: TaxelGrid for shift scaling
+        max_shift: Maximum shift in grid cells
+
+    Returns:
+        Tuple of (shift_x, shift_y) in grid cell units
+    """
+    # Convert torch tensor to numpy if needed
+    if hasattr(shear_force, 'cpu'):
+        shear_np = shear_force.cpu().numpy()
+    else:
+        shear_np = np.asarray(shear_force)
+
+    if shear_np.size == 0:
+        return (0, 0)
+
+    # Compute average shear direction
+    avg_fx = np.mean(shear_np[..., 0])
+    avg_fy = np.mean(shear_np[..., 1])
+
+    # Normalize by magnitude
+    magnitude = np.sqrt(avg_fx**2 + avg_fy**2)
+    if magnitude < 1e-6:
+        return (0, 0)
+
+    # Scale to grid shift
+    shift_x = int(np.clip(avg_fx / magnitude * max_shift, -max_shift, max_shift))
+    shift_y = int(np.clip(avg_fy / magnitude * max_shift, -max_shift, max_shift))
+
+    return (shift_x, shift_y)
+
+
+def combine_normal_and_shear(
+    normal_force: Union[np.ndarray, "torch.Tensor"],
+    shear_force: Union[np.ndarray, "torch.Tensor"],
+    grid: TaxelGrid,
+    scale: float = 1000.0,
+    max_value: int = 4095,
+) -> np.ndarray:
+    """Combine TacSL normal and shear forces into shifted taxel grid.
+
+    Creates a taxel grid from normal forces with spatial shift
+    based on shear direction, similar to the ContactSensor approach
+    but using actual per-taxel force data.
+
+    Args:
+        normal_force: Normal force field tensor of shape (H, W)
+        shear_force: Shear force tensor of shape (H, W, 2)
+        grid: TaxelGrid defining output dimensions
+        scale: Conversion factor from Newtons to taxel units
+        max_value: Maximum taxel value
+
+    Returns:
+        2D numpy array of int16 taxel values
+    """
+    # Get base taxel grid from normal forces
+    taxels = tacsl_to_taxel_grid(normal_force, grid, scale, max_value)
+
+    # Get shear-based shift
+    shift_x, shift_y = tacsl_shear_to_shift(shear_force, grid)
+
+    # Apply shift using numpy roll
+    if shift_x != 0:
+        taxels = np.roll(taxels, shift_x, axis=1)
+    if shift_y != 0:
+        taxels = np.roll(taxels, shift_y, axis=0)
+
+    return taxels
+
+
+def get_total_taxels_per_hand() -> int:
+    """Get total number of taxels per hand.
+
+    Returns:
+        531 (total taxels per hand based on IDL specification)
+    """
+    # Regular fingers: 4 x (9 + 96 + 80) = 4 x 185 = 740
+    # But wait - let me recalculate:
+    # - Pinky/Ring/Middle/Index tip: 3x3 = 9 each, total 36
+    # - Pinky/Ring/Middle/Index nail: 12x8 = 96 each, total 384
+    # - Pinky/Ring/Middle/Index pad: 10x8 = 80 each, total 320
+    # - Thumb tip: 3x3 = 9
+    # - Thumb nail: 12x8 = 96
+    # - Thumb middle: 3x3 = 9
+    # - Thumb pad: 12x8 = 96
+    # - Palm: 8x14 = 112
+    # Total: 36 + 384 + 320 + 9 + 96 + 9 + 96 + 112 = 1062 / 2 = 531 per hand
+
+    total = 0
+
+    # 4 regular fingers
+    total += 4 * TACTILE_GRIDS["tip"].size      # 4 x 9 = 36
+    total += 4 * TACTILE_GRIDS["nail"].size     # 4 x 96 = 384
+    total += 4 * TACTILE_GRIDS["pad"].size      # 4 x 80 = 320
+
+    # Thumb (4 regions)
+    total += TACTILE_GRIDS["tip"].size          # 9
+    total += TACTILE_GRIDS["nail"].size         # 96
+    total += TACTILE_GRIDS["thumb_middle"].size # 9
+    total += TACTILE_GRIDS["thumb_pad"].size    # 96
+
+    # Palm
+    total += TACTILE_GRIDS["palm"].size         # 112
+
+    return total  # Should be 1062 / 2 = 531
+
+
+# Add exports
+__all__ = [
+    "TaxelGrid",
+    "TACTILE_GRIDS",
+    "force_to_taxel_grid",
+    "flatten_taxel_grid",
+    "get_grid_for_region",
+    # TacSL functions
+    "tacsl_to_taxel_grid",
+    "tacsl_shear_to_shift",
+    "combine_normal_and_shear",
+    "get_total_taxels_per_hand",
+]

@@ -3,8 +3,23 @@
 """
 Inspire Hand tactile state extraction and DDS publishing.
 
-Extracts contact forces from ContactSensor on finger links and converts
-them to taxel arrays matching the real inspire_hand_touch DDS format.
+Supports two backends:
+1. ContactSensor: Uses Gaussian force-to-taxel approximation (default fallback)
+2. TacSL: Per-taxel force computation from visuo-tactile force field simulation
+
+The backend is auto-detected based on available sensors in the environment.
+TacSL provides higher fidelity sim-to-real transfer but requires:
+- isaaclab_contrib package installed
+- USD assets with elastomer geometry
+- TacSL sensor configs in scene
+
+Usage:
+    # Auto-detect backend (recommended)
+    tactile = get_inspire_tactile_state(env, enable_dds=True)
+
+    # Force specific backend
+    tactile = get_inspire_tactile_state(env, enable_dds=True, backend="tacsl")
+    tactile = get_inspire_tactile_state(env, enable_dds=True, backend="contact")
 """
 
 from __future__ import annotations
@@ -13,7 +28,7 @@ import torch
 import numpy as np
 import sys
 import os
-from typing import TYPE_CHECKING, Optional, Dict, Any
+from typing import TYPE_CHECKING, Optional, Dict, Any, Literal
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -23,6 +38,18 @@ from .tactile_mapping import (
     flatten_taxel_grid,
     TACTILE_GRIDS,
 )
+
+# Import TacSL module (may not be available)
+try:
+    from .tacsl_tactile import (
+        TACSL_AVAILABLE,
+        has_tacsl_sensors,
+        get_tacsl_tactile_state as _get_tacsl_state,
+    )
+except ImportError:
+    TACSL_AVAILABLE = False
+    has_tacsl_sensors = lambda env: False
+    _get_tacsl_state = None
 
 # Finger name mapping: simulation link prefix -> real IDL field prefix
 FINGER_MAP = {
@@ -42,6 +69,8 @@ _tactile_cache = {
     "dds_initialized": False,
     "last_publish_ms": 0,
     "publish_interval_ms": 20,  # 50Hz publishing rate
+    "backend": None,  # Auto-detected backend: "tacsl" or "contact"
+    "backend_checked": False,
 }
 
 
@@ -74,11 +103,91 @@ def _check_sensor_available(env: ManagerBasedRLEnv, sensor_name: str) -> bool:
     return sensor_name in env.scene.sensors
 
 
+def _detect_backend(env: ManagerBasedRLEnv) -> str:
+    """Auto-detect the best available tactile backend.
+
+    Args:
+        env: Isaac Lab environment instance
+
+    Returns:
+        "tacsl" if TacSL sensors available, "contact" otherwise
+    """
+    global _tactile_cache
+
+    if _tactile_cache["backend_checked"]:
+        return _tactile_cache["backend"]
+
+    # Check for TacSL sensors first (higher fidelity)
+    if TACSL_AVAILABLE and has_tacsl_sensors(env):
+        _tactile_cache["backend"] = "tacsl"
+        print("[inspire_tactile] Using TacSL backend (high-fidelity force fields)")
+    else:
+        _tactile_cache["backend"] = "contact"
+        if not TACSL_AVAILABLE:
+            print("[inspire_tactile] Using ContactSensor backend (TacSL not installed)")
+        else:
+            print("[inspire_tactile] Using ContactSensor backend (no TacSL sensors in scene)")
+
+    _tactile_cache["backend_checked"] = True
+    return _tactile_cache["backend"]
+
+
+def _should_use_tacsl(env: ManagerBasedRLEnv, backend: str) -> bool:
+    """Determine if TacSL backend should be used.
+
+    Args:
+        env: Isaac Lab environment instance
+        backend: Requested backend ("auto", "tacsl", or "contact")
+
+    Returns:
+        True if TacSL should be used
+    """
+    if backend == "contact":
+        return False
+    if backend == "tacsl":
+        if not TACSL_AVAILABLE:
+            print("[inspire_tactile] Warning: TacSL requested but not available, falling back to ContactSensor")
+            return False
+        return True
+    # Auto-detect
+    return _detect_backend(env) == "tacsl"
+
+
 def get_inspire_tactile_state(
     env: ManagerBasedRLEnv,
     enable_dds: bool = True,
+    backend: Literal["auto", "contact", "tacsl"] = "auto",
 ) -> torch.Tensor:
-    """Extract tactile data from contact sensors and optionally publish to DDS.
+    """Extract tactile data from sensors and optionally publish to DDS.
+
+    Supports two backends:
+    - "contact": ContactSensor with Gaussian force-to-taxel mapping
+    - "tacsl": TacSL visuo-tactile force field sensors (higher fidelity)
+
+    The backend is auto-detected by default, preferring TacSL when available.
+
+    Args:
+        env: Isaac Lab ManagerBasedRLEnv instance
+        enable_dds: Whether to publish tactile data via DDS
+        backend: Backend selection ("auto", "contact", or "tacsl")
+
+    Returns:
+        torch.Tensor: Flattened contact forces for all finger sensors
+                     Shape: (num_envs, total_force_components)
+    """
+    # Use TacSL backend if available and selected
+    if _should_use_tacsl(env, backend):
+        return _get_tacsl_state(env, enable_dds=enable_dds)
+
+    # Fall back to ContactSensor backend
+    return _get_contact_tactile_state(env, enable_dds=enable_dds)
+
+
+def _get_contact_tactile_state(
+    env: ManagerBasedRLEnv,
+    enable_dds: bool = True,
+) -> torch.Tensor:
+    """Extract tactile data from ContactSensor (original implementation).
 
     This function reads contact forces from ContactSensor instances attached
     to the Inspire hand finger links. Forces are converted to taxel arrays
@@ -256,4 +365,5 @@ __all__ = [
     "get_inspire_tactile_state",
     "FINGER_MAP",
     "FINGER_ORDER",
+    "TACSL_AVAILABLE",
 ]
